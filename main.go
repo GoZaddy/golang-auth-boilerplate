@@ -15,8 +15,11 @@ func init() {
 
 func main() {
 	router := mux.NewRouter()
-	router.HandleFunc("/api/register/email", controllers.RegsiterWithEmailAndPassword).Methods("POST")
+	router.HandleFunc("/api/register/email", controllers.RegisterWithEmailAndPassword).Methods("POST")
 	router.HandleFunc("/api/login/email", controllers.LoginWithEmailAndPassword).Methods("POST")
+
+	router.HandleFunc("/api/auth/google/get-url", controllers.GetGoogleLoginURL).Methods("GET")
+	router.HandleFunc("/api/auth/google/callback", controllers.LoginWithGoogle).Methods("GET")
 
 	log.Fatal(http.ListenAndServe(":8080", router))
 }
