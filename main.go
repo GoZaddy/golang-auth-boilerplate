@@ -21,5 +21,8 @@ func main() {
 	router.HandleFunc("/api/auth/google/get-url", controllers.GetGoogleLoginURL).Methods("GET")
 	router.HandleFunc("/api/auth/google/callback", controllers.LoginWithGoogle).Methods("GET")
 
+	router.HandleFunc("/api/auth/github/get-url", controllers.GetGithubLoginURL).Methods("GET")
+	router.HandleFunc("/api/auth/github/callback", controllers.LoginWithGithub).Methods("GET")
+
 	log.Fatal(http.ListenAndServe(":8080", router))
 }

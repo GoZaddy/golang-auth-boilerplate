@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"go.mongodb.org/mongo-driver/mongo"
+	"gopkg.in/go-playground/validator.v9"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 
@@ -49,13 +50,19 @@ func CreateAccount(account models.Account) error {
 					"_id": accountFromDB.ID,
 				}
 				update := bson.M{
-					"email_auth_details": account.EmailAuthDetails,
+					"$set": bson.M{
+						"email_auth_details": account.EmailAuthDetails,
+					},
 					"$addToSet": bson.M{
 						"auth_providers": models.EMAIL,
 					},
 				}
 
 				_, err := accountCollection.UpdateOne(context.Background(), filter, update)
+				if err == nil {
+					//This tells the authcontroller to not create a new profile for this user
+					return errors.New("Profile already exists")
+				}
 				return err
 			} else {
 				return errors.New("User already exists")
@@ -82,19 +89,22 @@ func CreateAccount(account models.Account) error {
 					"_id": accountFromDB.ID,
 				}
 				update := bson.M{
-					"google_auth_details": account.GoogleAuthDetails,
+					"$set": bson.M{
+						"google_auth_details": account.GoogleAuthDetails,
+					},
 					"$addToSet": bson.M{
 						"auth_providers": models.GOOGLE,
 					},
 				}
 
 				_, err := accountCollection.UpdateOne(context.Background(), filter, update)
+				if err == nil {
+					//This tells the authcontroller to not create a new profile for this user
+					return errors.New("Profile already exists")
+				}
 				return err
 			} else if accountFromDB.GoogleAuthDetails.ID == accountFromDB.GoogleAuthDetails.ID {
 				return errors.New("User already exists")
-			} else {
-				//TODO
-				errors.New("ERROR ERROR ERROR!")
 			}
 		}
 
@@ -102,6 +112,116 @@ func CreateAccount(account models.Account) error {
 
 	return nil
 
+}
+
+func CreateAccountWithOauthDetails(oauthDetails models.OAuthUserDetails) (string, error) {
+	var accountFromDB models.Account
+	var validate *validator.Validate = validator.New()
+	authProvider := oauthDetails.GetAuthProvider()
+	email := oauthDetails.GetEmail()
+
+	filter := bson.M{
+		"email": email,
+	}
+	result := accountCollection.FindOne(context.Background(), filter)
+	result.Decode(&accountFromDB)
+	if result.Err() != nil {
+		if errors.Is(result.Err(), mongo.ErrNoDocuments) {
+			fmt.Println("no documents found")
+			accountID := primitive.NewObjectID()
+			profileID := primitive.NewObjectID()
+			var newAccount models.Account
+			newAccount = models.Account{
+				ID:            accountID,
+				AuthProviders: []string{authProvider},
+				ProfileID:     profileID,
+				Email:         email,
+			}
+
+			newProfile := models.Profile{
+				ID:          profileID,
+				AccountID:   accountID,
+				Email:       email,
+				DisplayName: oauthDetails.GetUserName(),
+			}
+
+			switch authProvider {
+			case models.GITHUB:
+				newAccount.GithubAuthDetails = &models.GithubAuth{
+					ID: oauthDetails.GetID(),
+				}
+			case models.GOOGLE:
+				newAccount.GoogleAuthDetails = &models.GoogleAuth{
+					ID: oauthDetails.GetID(),
+				}
+			}
+			err := validate.Struct(newAccount)
+			if err != nil {
+				return "", err
+			}
+			_, err = accountCollection.InsertOne(context.Background(), newAccount)
+			if err != nil {
+				return "", err
+			}
+			err = validate.Struct(newProfile)
+			if err != nil {
+				return "", err
+			}
+			err = CreateProfile(newProfile)
+			if err != nil {
+				return "", err
+			}
+			return profileID.Hex(), nil
+		}
+		return "", result.Err()
+	}
+	//check if the email auth details of this account is empty(no email auth details) and if email provider is not among the providers. If those two are true, update the account to include email auth
+	filter = bson.M{
+		"_id": accountFromDB.ID,
+	}
+	var update bson.M
+	addToSet := bson.M{
+		"auth_providers": authProvider,
+	}
+	switch authProvider {
+	case models.GOOGLE:
+		if accountFromDB.GoogleAuthDetails == nil && indexOf(accountFromDB.AuthProviders, models.GOOGLE) == -1 {
+			update = bson.M{
+				"$set": bson.M{
+					"google_auth_details": &models.GoogleAuth{
+						ID: oauthDetails.GetID(),
+					},
+				},
+				"$addToSet": addToSet,
+			}
+			_, err := accountCollection.UpdateOne(context.Background(), filter, update)
+			if err != nil {
+				return "", err
+			}
+			return accountFromDB.ProfileID.Hex(), nil
+		} else if accountFromDB.GoogleAuthDetails.ID == oauthDetails.GetID() {
+			return accountFromDB.ProfileID.Hex(), nil
+		}
+	case models.GITHUB:
+		if accountFromDB.GithubAuthDetails == nil && indexOf(accountFromDB.AuthProviders, models.GITHUB) == -1 {
+			update = bson.M{
+				"$set": bson.M{
+					"github_auth_details": &models.GithubAuth{
+						ID: oauthDetails.GetID(),
+					},
+				},
+				"$addToSet": addToSet,
+			}
+			_, err := accountCollection.UpdateOne(context.Background(), filter, update)
+			if err != nil {
+				return "", err
+			}
+			return accountFromDB.ProfileID.Hex(), nil
+		} else if accountFromDB.GithubAuthDetails.ID == oauthDetails.GetID() {
+			return accountFromDB.ProfileID.Hex(), nil
+		}
+	}
+	return "", nil
 }
 
 //CreateProfile creates a new profile document

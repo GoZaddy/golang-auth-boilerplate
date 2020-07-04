@@ -12,6 +12,7 @@ import (
 	"os"
 
 	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/github"
 	"golang.org/x/oauth2/google"
 
 	"go.mongodb.org/mongo-driver/mongo"
@@ -25,6 +26,7 @@ import (
 )
 
 var conf *oauth2.Config
+var githubConf *oauth2.Config
 
 func init() {
 	conf = &oauth2.Config{
@@ -36,6 +38,16 @@ func init() {
 			"https://www.googleapis.com/auth/userinfo.profile",
 		},
 		Endpoint: google.Endpoint,
+	}
+
+	githubConf = &oauth2.Config{
+		ClientID:     os.Getenv("GITHUB_CLIENT_ID"),
+		ClientSecret: os.Getenv("GITHUB_CLIENT_SECRET"),
+		RedirectURL:  "http://localhost:8080/api/auth/github/callback",
+		Scopes: []string{
+			"read:user", "user:email",
+		},
+		Endpoint: github.Endpoint,
 	}
 }
 
@@ -108,6 +120,9 @@ func RegisterWithEmailAndPassword(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				if err.Error() == "User already exists" {
 					http.Error(w, err.Error(), http.StatusConflict)
+					return
+				} else if err.Error() == "Profile already exists" {
+					w.WriteHeader(http.StatusCreated)
 					return
 				}
 				http.Error(w, "Error creating account: "+err.Error(), http.StatusInternalServerError)
@@ -230,20 +245,42 @@ func GetGoogleLoginURL(w http.ResponseWriter, r *http.Request) {
 	rand.Read(b)
 	state := base64.StdEncoding.EncodeToString(b)
 	cookie := &http.Cookie{
-		Name:     "state",
+		Name:     "google-auth-state",
 		Value:    state,
 		HttpOnly: true,
 	}
 	http.SetCookie(w, cookie)
 	w.Write([]byte("<html><title>Golang Google</title> <body> <a href='" + conf.AuthCodeURL(state) + "'><button>Login with Google!</button> </a> </body></html>"))
-	utils.EncodeJSON(w, map[string]string{
+	/*utils.EncodeJSON(w, map[string]string{
 		"google_login_url": conf.AuthCodeURL(state),
-	})
+	})*/
 }
+
+func GetGithubLoginURL(w http.ResponseWriter, r *http.Request) {
+	utils.InitEndpointWithOptions(w, r, utils.InitEndpointOptions{
+		Methods: "GET",
+		Origin:  "*",
+	})
+
+	b := make([]byte, 32)
+	rand.Read(b)
+	state := base64.StdEncoding.EncodeToString(b)
+	cookie := &http.Cookie{
+		Name:     "github-auth-state",
+		Value:    state,
+		HttpOnly: true,
+	}
+	http.SetCookie(w, cookie)
+	w.Write([]byte("<html><title>Golang Github</title> <body> <a href='" + githubConf.AuthCodeURL(state) + "'><button>Login with Github!</button> </a> </body></html>"))
+	/*utils.EncodeJSON(w, map[string]string{
+		"github_login_url": githubConf.AuthCodeURL(state),
+	})*/
+}
+
 func Logout(w http.ResponseWriter, r *http.Request) {} //jwt
 
 func LoginWithGoogle(w http.ResponseWriter, r *http.Request) {
-	savedState, err := r.Cookie("state")
+	savedState, err := r.Cookie("google-auth-state")
 	if err != nil || savedState.Value != r.URL.Query().Get("state") {
 		fmt.Println(savedState)
 		http.Error(w, "Invalid state", http.StatusUnauthorized)
@@ -264,101 +301,89 @@ func LoginWithGoogle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	defer profile.Body.Close()
-	var userDetails struct {
-		Sub           string `json:"sub"`
-		Name          string `json:"name"`
-		Email         string `json:"email"`
-		EmailVerified bool   `json:"email_verified"`
-	}
+	var userDetails models.GoogleUserDetails
 	json.NewDecoder(profile.Body).Decode(&userDetails)
 	fmt.Println(userDetails)
 
-	accountID := primitive.NewObjectID()
-	profileID := primitive.NewObjectID()
-	newAccount := models.Account{
-		ID:            accountID,
-		Email:         userDetails.Email,
-		AuthProviders: []string{models.GOOGLE},
-		GoogleAuthDetails: &models.GoogleAuth{
-			ID: userDetails.Sub,
-		},
-		ProfileID: profileID,
-	}
-
-	newProfile := models.Profile{
-		ID:          profileID,
-		AccountID:   accountID,
-		Email:       userDetails.Email,
-		DisplayName: userDetails.Name,
-	}
-
-	if ok := utils.ValidateStructFromRequestBody(w, newAccount); ok {
-		if ok := utils.ValidateStructFromRequestBody(w, newProfile); ok {
-			err = database.CreateAccount(newAccount)
-			if err != nil {
-				if err.Error() == "User already exists" {
-					fmt.Println("user already exists so logging in straight")
-					tokenDetails, err := utils.CreateToken(os.Getenv("ACCESS_TOKEN_KEY"), os.Getenv("REFRESH_TOKEN_KEY"), profileID.Hex())
-					if err != nil {
-						http.Error(w, "Couldn't create token: "+err.Error(), http.StatusInternalServerError)
-						return
-					}
-
-					err = utils.CreateAuth(profileID.Hex(), tokenDetails, database.Store)
-					if err != nil {
-						http.Error(w, err.Error(), http.StatusInternalServerError)
-						return
-					}
-
-					utils.EncodeJSON(w, map[string]string{
-						"access_token":  tokenDetails.AccessToken,
-						"refresh_token": tokenDetails.RefreshToken,
-						"profile_id":    profileID.Hex(),
-					})
-					w.WriteHeader(http.StatusCreated)
-					return
-				}
-				http.Error(w, "Error creating account: "+err.Error(), http.StatusInternalServerError)
-				return
-			}
-
-			err = database.CreateProfile(newProfile)
-			if err != nil {
-				http.Error(w, "Error creating profile: "+err.Error(), http.StatusInternalServerError)
-				return
-			}
-
-			tokenDetails, err := utils.CreateToken(os.Getenv("ACCESS_TOKEN_KEY"), os.Getenv("REFRESH_TOKEN_KEY"), profileID.Hex())
-			if err != nil {
-				http.Error(w, "Couldn't create token: "+err.Error(), http.StatusInternalServerError)
-				return
-			}
-
-			err = utils.CreateAuth(profileID.Hex(), tokenDetails, database.Store)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-
-			utils.EncodeJSON(w, map[string]string{
-				"access_token":  tokenDetails.AccessToken,
-				"refresh_token": tokenDetails.RefreshToken,
-				"profile_id":    profileID.Hex(),
-			})
-			w.WriteHeader(http.StatusCreated)
-		} else {
-			return
-		}
-
-	} else {
+	profileID, err := database.CreateAccountWithOauthDetails(userDetails)
+	if err != nil {
+		http.Error(w, "Error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	/*data, _ := ioutil.ReadAll(profile.Body)
-	fmt.Println("Profile Body: ", string(data))*/
+	tokenDetails, err := utils.CreateToken(os.Getenv("ACCESS_TOKEN_KEY"), os.Getenv("REFRESH_TOKEN_KEY"), profileID)
+	if err != nil {
+		http.Error(w, "Couldn't create token: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	err = utils.CreateAuth(profileID, tokenDetails, database.Store)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	utils.EncodeJSON(w, map[string]string{
+		"access_token":  tokenDetails.AccessToken,
+		"refresh_token": tokenDetails.RefreshToken,
+		"profile_id":    profileID,
+	})
+	w.WriteHeader(http.StatusCreated)
 
 }
 
-func LoginWithFacebook(w http.ResponseWriter, r *http.Request) {}
+func LoginWithGithub(w http.ResponseWriter, r *http.Request) {
+	savedState, err := r.Cookie("github-auth-state")
+	if err != nil || savedState.Value != r.URL.Query().Get("state") {
+		fmt.Println(savedState)
+		http.Error(w, "Invalid state", http.StatusUnauthorized)
+		return
+	}
+	fmt.Println("code: " + r.URL.Query().Get("code"))
+	token, err := githubConf.Exchange(context.Background(), r.URL.Query().Get("code"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	fmt.Print("token: ")
+	fmt.Println(token)
 
-func LoginWithGithub(w http.ResponseWriter, r *http.Request) {}
+	client := githubConf.Client(context.Background(), token)
+	profile, err := client.Get("https://api.github.com/user")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer profile.Body.Close()
+
+	var githubDetails models.GithubUserDetails
+	json.NewDecoder(profile.Body).Decode(&githubDetails)
+
+	fmt.Println(githubDetails)
+
+	profileID, err := database.CreateAccountWithOauthDetails(githubDetails)
+	if err != nil {
+		http.Error(w, "Error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	tokenDetails, err := utils.CreateToken(os.Getenv("ACCESS_TOKEN_KEY"), os.Getenv("REFRESH_TOKEN_KEY"), profileID)
+	if err != nil {
+		http.Error(w, "Couldn't create token: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	err = utils.CreateAuth(profileID, tokenDetails, database.Store)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	utils.EncodeJSON(w, map[string]string{
+		"access_token":  tokenDetails.AccessToken,
+		"refresh_token": tokenDetails.RefreshToken,
+		"profile_id":    profileID,
+	})
+	w.WriteHeader(http.StatusCreated)
+
+}
