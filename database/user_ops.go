@@ -24,93 +24,83 @@ func indexOf(s []string, input string) int {
 	return -1
 }
 
-//CreateAccount creates a new account document. For the  auth methods, add only the auth provider you are currently creating an account with
-func CreateAccount(account models.Account) error {
+func CreateAccountWithEmailDetails(email string, password []byte, name string) (string, error) {
 	var accountFromDB models.Account
+	var validate *validator.Validate = validator.New()
 
-	switch account.AuthProviders[0] {
-	case models.EMAIL:
-		filter := bson.M{
-			"email": account.Email,
-		}
-		result := accountCollection.FindOne(context.Background(), filter)
-		result.Decode(&accountFromDB)
-		if result.Err() != nil {
-			if errors.Is(result.Err(), mongo.ErrNoDocuments) {
-				fmt.Println("no documents found")
-				_, err := accountCollection.InsertOne(context.Background(), account)
-				return err
-			}
-			return result.Err()
-		} else {
-			//check if the email auth details of this account is empty(no email auth details) and if email provider is not among the providers. If those two are true, update the account to include email auth
-
-			if accountFromDB.EmailAuthDetails == nil && indexOf(accountFromDB.AuthProviders, models.EMAIL) == -1 {
-				filter = bson.M{
-					"_id": accountFromDB.ID,
-				}
-				update := bson.M{
-					"$set": bson.M{
-						"email_auth_details": account.EmailAuthDetails,
-					},
-					"$addToSet": bson.M{
-						"auth_providers": models.EMAIL,
-					},
-				}
-
-				_, err := accountCollection.UpdateOne(context.Background(), filter, update)
-				if err == nil {
-					//This tells the authcontroller to not create a new profile for this user
-					return errors.New("Profile already exists")
-				}
-				return err
-			} else {
-				return errors.New("User already exists")
-			}
-		}
-	case models.GOOGLE:
-		filter := bson.M{
-			"email": account.Email,
-		}
-		result := accountCollection.FindOne(context.Background(), filter)
-		result.Decode(&accountFromDB)
-		if result.Err() != nil {
-			if errors.Is(result.Err(), mongo.ErrNoDocuments) {
-				fmt.Println("no documents found")
-				_, err := accountCollection.InsertOne(context.Background(), account)
-				return err
-			}
-			return result.Err()
-		} else {
-			//check if the email auth details of this account is empty(no email auth details) and if email provider is not among the providers. If those two are true, update the account to include email auth
-
-			if accountFromDB.GoogleAuthDetails == nil && indexOf(accountFromDB.AuthProviders, models.GOOGLE) == -1 {
-				filter = bson.M{
-					"_id": accountFromDB.ID,
-				}
-				update := bson.M{
-					"$set": bson.M{
-						"google_auth_details": account.GoogleAuthDetails,
-					},
-					"$addToSet": bson.M{
-						"auth_providers": models.GOOGLE,
-					},
-				}
-
-				_, err := accountCollection.UpdateOne(context.Background(), filter, update)
-				if err == nil {
-					//This tells the authcontroller to not create a new profile for this user
-					return errors.New("Profile already exists")
-				}
-				return err
-			} else if accountFromDB.GoogleAuthDetails.ID == accountFromDB.GoogleAuthDetails.ID {
-				return errors.New("User already exists")
-			}
-		}
-
+	filter := bson.M{
+		"email": email,
 	}
+	result := accountCollection.FindOne(context.Background(), filter)
+	result.Decode(&accountFromDB)
+	if result.Err() != nil {
+		if errors.Is(result.Err(), mongo.ErrNoDocuments) {
+			fmt.Println("no documents found")
+			accountID := primitive.NewObjectID()
+			profileID := primitive.NewObjectID()
 
-	return nil
+			newAccount := models.Account{
+				ID:            accountID,
+				Email:         email,
+				AuthProviders: []string{models.EMAIL},
+				EmailAuthDetails: &models.EmailAuth{
+					Password: password,
+				},
+				ProfileID: profileID,
+			}
+
+			newProfile := models.Profile{
+				ID:          profileID,
+				AccountID:   accountID,
+				DisplayName: name,
+				Email:       email,
+			}
+
+			err := validate.Struct(newAccount)
+			if err != nil {
+				return "", err
+			}
+			_, err = accountCollection.InsertOne(context.Background(), newAccount)
+			if err != nil {
+				return "", err
+			}
+			err = validate.Struct(newProfile)
+			if err != nil {
+				return "", err
+			}
+			err = CreateProfile(newProfile)
+			if err != nil {
+				return "", err
+			}
+			return profileID.Hex(), nil
+		}
+		return "", result.Err()
+	}
+	//check if the email auth details of this account is empty(no email auth details) and if email provider is not among the providers. If those two are true, update the account to include email auth
+
+	if accountFromDB.EmailAuthDetails == nil && indexOf(accountFromDB.AuthProviders, models.EMAIL) == -1 {
+		filter = bson.M{
+			"_id": accountFromDB.ID,
+		}
+		update := bson.M{
+			"$set": bson.M{
+				"email_auth_details": &models.EmailAuth{
+					Password: password,
+				},
+			},
+			"$addToSet": bson.M{
+				"auth_providers": models.EMAIL,
+			},
+		}
+
+		_, err := accountCollection.UpdateOne(context.Background(), filter, update)
+		if err != nil {
+			return "", err
+		}
+		return accountFromDB.ProfileID.Hex(), nil
+	} else {
+		return "", errors.New("User already exists")
+	}
 
 }
 

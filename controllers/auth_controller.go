@@ -20,7 +20,6 @@ import (
 	"github.com/dgrijalva/jwt-go"
 	"github.com/gozaddy/golang-auth-boilerplate/database"
 	"github.com/gozaddy/golang-auth-boilerplate/models"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"golang.org/x/crypto/bcrypt"
 
 	utils "github.com/gozaddy/golang-webdev-utils"
@@ -79,7 +78,9 @@ func RegisterWithEmailAndPassword(w http.ResponseWriter, r *http.Request) {
 		}
 
 	} else if r.Header.Get("Content-Type") == "application/json" {
-		err := utils.DecodeJSONBody(w, r, u)
+		fmt.Println(r.Header.Get("Content-Type"))
+		err := utils.DecodeJSONBody(w, r, &u)
+		fmt.Println(u)
 		if err != nil {
 			var mr *utils.MalformedRequest
 			if errors.As(err, &mr) {
@@ -96,72 +97,34 @@ func RegisterWithEmailAndPassword(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal server error:"+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	profileID := primitive.NewObjectID()
-	accountID := primitive.NewObjectID()
-	account := models.Account{
-		ID:            accountID,
-		AuthProviders: []string{models.EMAIL},
-		Email:         u.Email,
-		EmailAuthDetails: &models.EmailAuth{
-			Password: hashedPassword,
-		},
-		ProfileID: profileID,
-	}
-
-	profile := models.Profile{
-		ID:          profileID,
-		AccountID:   accountID,
-		DisplayName: u.Name,
-		Email:       u.Email,
-	}
-
-	if ok := utils.ValidateStructFromRequestBody(w, account); ok {
-		if ok := utils.ValidateStructFromRequestBody(w, profile); ok {
-			err = database.CreateAccount(account)
-			if err != nil {
-				if err.Error() == "User already exists" {
-					http.Error(w, err.Error(), http.StatusConflict)
-					return
-				} else if err.Error() == "Profile already exists" {
-					w.WriteHeader(http.StatusCreated)
-					return
-				}
-				http.Error(w, "Error creating account: "+err.Error(), http.StatusInternalServerError)
-				return
-			}
-
-			err = database.CreateProfile(profile)
-			if err != nil {
-				http.Error(w, "Error creating profile: "+err.Error(), http.StatusInternalServerError)
-				return
-			}
-
-			tokenDetails, err := utils.CreateToken(os.Getenv("ACCESS_TOKEN_KEY"), os.Getenv("REFRESH_TOKEN_KEY"), profileID.Hex())
-			if err != nil {
-				http.Error(w, "Couldn't create token: "+err.Error(), http.StatusInternalServerError)
-				return
-			}
-
-			err = utils.CreateAuth(profileID.Hex(), tokenDetails, database.Store)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-
-			w.WriteHeader(http.StatusCreated)
-			utils.EncodeJSON(w, map[string]string{
-				"access_token":  tokenDetails.AccessToken,
-				"refresh_token": tokenDetails.RefreshToken,
-				"profile_id":    profileID.Hex(),
-			})
-
-		} else {
+	profileID, err := database.CreateAccountWithEmailDetails(u.Email, hashedPassword, u.Name)
+	if err != nil {
+		if err.Error() == "User already exists" {
+			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
-
-	} else {
+		http.Error(w, "Error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	tokenDetails, err := utils.CreateToken(os.Getenv("ACCESS_TOKEN_KEY"), os.Getenv("REFRESH_TOKEN_KEY"), profileID)
+	if err != nil {
+		http.Error(w, "Couldn't create token: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	err = utils.CreateAuth(profileID, tokenDetails, database.Store)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	utils.EncodeJSON(w, map[string]string{
+		"access_token":  tokenDetails.AccessToken,
+		"refresh_token": tokenDetails.RefreshToken,
+		"profile_id":    profileID,
+	})
+	w.WriteHeader(http.StatusCreated)
 
 } //jwt
 
