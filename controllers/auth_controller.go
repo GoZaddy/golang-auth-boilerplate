@@ -155,7 +155,7 @@ func LoginWithEmailAndPassword(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else if r.Header.Get("Content-Type") == "application/json" {
-		err := utils.DecodeJSONBody(w, r, u)
+		err := utils.DecodeJSONBody(w, r, &u)
 		if err != nil {
 			var mr *utils.MalformedRequest
 			if errors.As(err, &mr) {
