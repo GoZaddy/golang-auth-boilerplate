@@ -55,6 +55,7 @@ func ValidateJWT(next http.HandlerFunc) http.HandlerFunc {
 					return
 				}
 				re := r.WithContext(context.WithValue(r.Context(), utils.ContextKey("decoded"), claims))
+				fmt.Println(claims)
 				fmt.Println("token valid")
 				next(w, re)
 

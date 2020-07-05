@@ -17,6 +17,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/mongo"
 
+	"github.com/dgrijalva/jwt-go"
 	"github.com/gozaddy/golang-auth-boilerplate/database"
 	"github.com/gozaddy/golang-auth-boilerplate/models"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -277,7 +278,30 @@ func GetGithubLoginURL(w http.ResponseWriter, r *http.Request) {
 	})*/
 }
 
-func Logout(w http.ResponseWriter, r *http.Request) {} //jwt
+//Must be used with the validateJWT middleware
+func Logout(w http.ResponseWriter, r *http.Request) {
+	utils.InitEndpointWithOptions(w, r, utils.InitEndpointOptions{
+		Methods: "POST",
+		Origin:  "*",
+	})
+	tokenClaims, ok := r.Context().Value(utils.ContextKey("decoded")).(jwt.MapClaims)
+	fmt.Println(r.Context().Value(utils.ContextKey("decoded")))
+	if !ok {
+		http.Error(w, "Internal server error: could not properly decode token claims from token", http.StatusInternalServerError)
+		return
+	}
+
+	_, err := database.Store.Do("DEL", tokenClaims["access_uuid"].(string))
+
+	if err != nil {
+		http.Error(w, "Error logging out", http.StatusInternalServerError)
+		return
+	}
+
+	utils.EncodeJSON(w, map[string]string{
+		"message": "Successfully logged out!",
+	})
+} //jwt
 
 func LoginWithGoogle(w http.ResponseWriter, r *http.Request) {
 	savedState, err := r.Cookie("google-auth-state")
@@ -385,5 +409,88 @@ func LoginWithGithub(w http.ResponseWriter, r *http.Request) {
 		"profile_id":    profileID,
 	})
 	w.WriteHeader(http.StatusCreated)
+
+}
+
+//RefreshToken endpoint is used to refresh JWTs, the refresh token must be passed in the request body as refresh_token
+func RefreshToken(w http.ResponseWriter, r *http.Request) {
+	utils.InitEndpointWithOptions(w, r, utils.InitEndpointOptions{
+		Methods: "POST",
+		Origin:  "*",
+	})
+
+	var refreshTokenStruct struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+
+	err := utils.DecodeJSONBody(w, r, &refreshTokenStruct)
+	if err != nil {
+		var mr *utils.MalformedRequest
+		if errors.As(err, &mr) {
+			http.Error(w, mr.Msg, mr.Status)
+		} else {
+			log.Println(err.Error())
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		}
+		return
+	}
+	token, err := jwt.Parse(refreshTokenStruct.RefreshToken, func(token *jwt.Token) (interface{}, error) {
+		//Make sure that the token method conform to "SigningMethodHMAC"
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return []byte(os.Getenv("REFRESH_TOKEN_KEY")), nil
+	})
+
+	if err != nil {
+		http.Error(w, "Refresh token expired", http.StatusUnauthorized)
+		return
+	}
+	if _, ok := token.Claims.(jwt.Claims); !ok && !token.Valid {
+		http.Error(w, "Invalid refresh token", http.StatusUnauthorized)
+		return
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if ok && token.Valid {
+		refreshUUID, ok := claims["refresh_uuid"].(string)
+		if !ok {
+			http.Error(w, "Invalid token", http.StatusUnprocessableEntity)
+			return
+		}
+
+		userid, ok := claims["user_id"].(string)
+		if !ok {
+			http.Error(w, "Invalid token", http.StatusUnprocessableEntity)
+			return
+		}
+
+		//delete the previous refresh token
+		_, err = database.Store.Do("DEL", refreshUUID)
+		if err != nil {
+			http.Error(w, "Error deleting previous refresh token: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		//create new pairs of refresh and access tokens
+		tokenDetails, err := utils.CreateToken(os.Getenv("ACCESS_TOKEN_KEY"), os.Getenv("REFRESH_TOKEN_KEY"), userid)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		}
+
+		//store new token details in redis store
+		err = utils.CreateAuth(userid, tokenDetails, database.Store)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		}
+
+		utils.EncodeJSON(w, map[string]string{
+			"access_token":  tokenDetails.AccessToken,
+			"refresh_token": tokenDetails.RefreshToken,
+		})
+
+	}
 
 }
