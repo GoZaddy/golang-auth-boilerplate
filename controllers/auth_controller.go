@@ -29,6 +29,7 @@ var conf *oauth2.Config
 var githubConf *oauth2.Config
 
 func init() {
+	//The oauth config for google sign in
 	conf = &oauth2.Config{
 		ClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
 		ClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
@@ -40,6 +41,7 @@ func init() {
 		Endpoint: google.Endpoint,
 	}
 
+	//The oauth config for github sign in
 	githubConf = &oauth2.Config{
 		ClientID:     os.Getenv("GITHUB_CLIENT_ID"),
 		ClientSecret: os.Getenv("GITHUB_CLIENT_SECRET"),
@@ -51,7 +53,8 @@ func init() {
 	}
 }
 
-//RegsiterWithEmailAndPassword registers a new user
+//RegisterWithEmailAndPassword registers a new user using their email and password.
+//A StatusConflict code is returned if the user already exists and a StatusBadRequest is returned if the client input fails validation
 func RegisterWithEmailAndPassword(w http.ResponseWriter, r *http.Request) {
 	utils.InitEndpointWithOptions(w, r, utils.InitEndpointOptions{
 		Methods: "POST",
@@ -128,6 +131,8 @@ func RegisterWithEmailAndPassword(w http.ResponseWriter, r *http.Request) {
 
 } //jwt
 
+//LoginWithEmailAndPassword logs in a user using their email and password
+//A StatusBadRequest is returned if the client input fails validation and a StatusNotFound is returned if the user doesn't exist
 func LoginWithEmailAndPassword(w http.ResponseWriter, r *http.Request) {
 	utils.InitEndpointWithOptions(w, r, utils.InitEndpointOptions{
 		Methods: "POST",
@@ -199,6 +204,9 @@ func LoginWithEmailAndPassword(w http.ResponseWriter, r *http.Request) {
 
 } //jwt
 
+//GetGoogleLoginURL is a GET endpoint used by the client to return a url which can be used to sign in with the user's google account
+//The same url cannot be used twice as each url generated is unique
+//Currently this endpoint returns a button that prompt Google sign in when clicked. Uncomment the last block of code to return the url in a JSON
 func GetGoogleLoginURL(w http.ResponseWriter, r *http.Request) {
 	utils.InitEndpointWithOptions(w, r, utils.InitEndpointOptions{
 		Methods: "GET",
@@ -220,6 +228,9 @@ func GetGoogleLoginURL(w http.ResponseWriter, r *http.Request) {
 	})*/
 }
 
+//GetGithubLoginURL is a GET endpoint used by the client to return a url which can be used to sign in with the user's github account
+//The same url cannot be used twice as each url generated is unique
+//Currently this endpoint returns a button that prompt Github sign in when clicked. Uncomment the last block of code to return the url in a JSON
 func GetGithubLoginURL(w http.ResponseWriter, r *http.Request) {
 	utils.InitEndpointWithOptions(w, r, utils.InitEndpointOptions{
 		Methods: "GET",
@@ -241,7 +252,8 @@ func GetGithubLoginURL(w http.ResponseWriter, r *http.Request) {
 	})*/
 }
 
-//Must be used with the validateJWT middleware
+//Logout endpoint must be used with the validateJWT middleware as it gets the tokenClaims from there
+//It deletes the access token from Redis thereby rendering an access token invalid once a user logs out
 func Logout(w http.ResponseWriter, r *http.Request) {
 	utils.InitEndpointWithOptions(w, r, utils.InitEndpointOptions{
 		Methods: "POST",
@@ -266,6 +278,8 @@ func Logout(w http.ResponseWriter, r *http.Request) {
 	})
 } //jwt
 
+//LoginWithGoogle endpoint verifies that the state in the URL is correct by comparing it against the state stored in a cookie. It then gets the necessary user information from google and creates an account for the user if the user is new or log them in.
+//After a successful login, an access token,refresh tokens and the profile ID of the user will be returned in a JSON
 func LoginWithGoogle(w http.ResponseWriter, r *http.Request) {
 	savedState, err := r.Cookie("google-auth-state")
 	if err != nil || savedState.Value != r.URL.Query().Get("state") {
@@ -319,6 +333,8 @@ func LoginWithGoogle(w http.ResponseWriter, r *http.Request) {
 
 }
 
+//LoginWithGithub endpoint verifies that the state in the URL is correct by comparing it against the state stored in a cookie. It then gets the necessary user information from google and creates an account for the user if the user is new or log them in.
+//After a successful login, an access token,refresh tokens and the profile ID of the user will be returned in a JSON
 func LoginWithGithub(w http.ResponseWriter, r *http.Request) {
 	savedState, err := r.Cookie("github-auth-state")
 	if err != nil || savedState.Value != r.URL.Query().Get("state") {
