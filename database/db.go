@@ -6,8 +6,6 @@ import (
 	"log"
 	"os"
 
-	"github.com/joho/godotenv"
-
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -21,13 +19,9 @@ var (
 	mongodbURI        string
 )
 
-func init() {
-	godotenv.Load(".env")
-}
-
 //Connect connects to MongoDB
 func Connect() {
-
+	fmt.Println(os.Getenv("MONGODB_URI"))
 	mongodbURI = os.Getenv("MONGODB_URI")
 	clientOptions := options.Client().ApplyURI(mongodbURI)
 	mongoDBClient, err = mongo.Connect(context.TODO(), clientOptions)

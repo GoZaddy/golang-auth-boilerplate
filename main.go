@@ -3,8 +3,10 @@ package main
 import (
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/gozaddy/golang-auth-boilerplate/middleware"
+	"github.com/joho/godotenv"
 
 	"github.com/gorilla/mux"
 	"github.com/gozaddy/golang-auth-boilerplate/controllers"
@@ -12,6 +14,7 @@ import (
 )
 
 func init() {
+	godotenv.Load("./.env")
 	database.Connect()
 }
 
@@ -32,5 +35,11 @@ func main() {
 
 	router.HandleFunc("/api/profiles", middleware.ValidateJWT(controllers.GetProfiles)).Methods("GET")
 
-	log.Fatal(http.ListenAndServe(":8080", router))
+	var port string
+	if os.Getenv("PORT") != "" {
+		port = os.Getenv("PORT")
+	} else {
+		port = "8080"
+	}
+	log.Fatal(http.ListenAndServe(":"+port, router))
 }

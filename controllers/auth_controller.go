@@ -246,10 +246,12 @@ func GetGithubLoginURL(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 	}
 	http.SetCookie(w, cookie)
-	w.Write([]byte("<html><title>Golang Github</title> <body> <a href='" + githubConf.AuthCodeURL(state) + "'><button>Login with Github!</button> </a> </body></html>"))
-	/*utils.EncodeJSON(w, map[string]string{
+
+	//For testing
+	//w.Write([]byte("<html><title>Golang Github</title> <body> <a href='" + githubConf.AuthCodeURL(state) + "'><button>Login with Github!</button> </a> </body></html>"))
+	utils.EncodeJSON(w, map[string]string{
 		"github_login_url": githubConf.AuthCodeURL(state),
-	})*/
+	})
 }
 
 //Logout endpoint must be used with the validateJWT middleware as it gets the tokenClaims from there

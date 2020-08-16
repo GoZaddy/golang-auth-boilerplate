@@ -10,17 +10,15 @@ import (
 	"github.com/dgrijalva/jwt-go"
 	"github.com/gozaddy/golang-auth-boilerplate/database"
 	utils "github.com/gozaddy/golang-webdev-utils"
-	"github.com/joho/godotenv"
 )
-
-func init() {
-	godotenv.Load(".env")
-}
 
 //ValidateJWT validates jwt token sent to the server
 func ValidateJWT(next http.HandlerFunc) http.HandlerFunc {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		utils.InitEndPoint(w, r)
+		utils.InitEndpointWithOptions(w, r, utils.InitEndpointOptions{
+			Origin:  "*",
+			Methods: "POST,GET,PUT,DELETE,OPTIONS,PATCH",
+		})
 		authorizationHeader := r.Header.Get("Authorization")
 		fmt.Println(authorizationHeader)
 		bearerToken := strings.Split(authorizationHeader, " ")
